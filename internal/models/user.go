@@ -9,6 +9,7 @@ type User struct {
 	PasswordHash     string    `json:"-"`
 	Bio              string    `json:"bio"`
 	Status           string    `json:"status"`
+	Activity         string    `json:"activity,omitempty"`
 	AvatarURL        string    `json:"avatarUrl,omitempty"`
 	PublicKeyFingerprint string `json:"publicKeyFingerprint,omitempty"`
 	CreatedAt        time.Time `json:"createdAt"`
@@ -36,7 +37,9 @@ type UserSearchResult struct {
 	Email       string `json:"email"`
 	Bio         string `json:"bio"`
 	Status      string `json:"status"`
+	Activity    string `json:"activity,omitempty"`
 	AvatarURL   string `json:"avatarUrl,omitempty"`
+	PublicKeyFingerprint string `json:"publicKeyFingerprint,omitempty"`
 }
 
 type FriendRequest struct {
@@ -54,6 +57,8 @@ type Friend struct {
 	Email       string `json:"email"`
 	Bio         string `json:"bio"`
 	Status      string `json:"status"`
+	Activity    string `json:"activity,omitempty"`
 	AvatarURL   string `json:"avatarUrl,omitempty"`
+	PublicKeyFingerprint string `json:"publicKeyFingerprint,omitempty"`
 	Online      bool   `json:"online"`
 }

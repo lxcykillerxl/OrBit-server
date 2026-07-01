@@ -43,6 +43,9 @@ func main() {
 			r.Get("/profile", userHandler.GetProfile)
 			r.Put("/profile", userHandler.UpdateProfile)
 			r.Put("/profile/key", userHandler.UpdatePublicKey)
+			r.Put("/users/me/profile", userHandler.UpdateProfile)
+			r.Put("/users/presence", userHandler.UpdatePresence)
+			r.Get("/users/{id}/pulse", userHandler.GetPulse)
 
 			r.Get("/users/search", userHandler.SearchUsers)
 			r.Get("/users/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -63,9 +66,16 @@ func main() {
 			r.Post("/projects", projectHandler.Create)
 			r.Get("/projects", projectHandler.List)
 			r.Get("/projects/{id}/members", projectHandler.Members)
+			r.Put("/projects/{id}", projectHandler.Update)
 			r.Post("/projects/{id}/invite", projectHandler.Invite)
-			r.Post("/projects/{id}/push", projectHandler.PushDelta)
-			r.Get("/projects/{id}/pull", projectHandler.PullDeltas)
+			// P2P Phase 4: Data sync endpoints removed. The UI now relies entirely on libp2p.
+			// r.Post("/projects/{id}/push", projectHandler.PushDelta)
+			// r.Get("/projects/{id}/pull", projectHandler.PullDeltas)
+
+			r.Post("/projects/{id}/tasks", projectHandler.CreateTask)
+			r.Get("/projects/{id}/tasks", projectHandler.ListTasks)
+			r.Put("/projects/{id}/tasks/{taskId}/complete", projectHandler.CompleteTask)
+			r.Get("/projects/{id}/leaderboard", projectHandler.Leaderboard)
 		})
 	})
 
