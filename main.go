@@ -60,6 +60,7 @@ func main() {
 
 			r.Post("/friends/request", friendHandler.SendRequest)
 			r.Post("/friends/accept", friendHandler.AcceptRequest)
+			r.Post("/friends/decline", friendHandler.DeclineRequest)
 			r.Get("/friends/requests", friendHandler.GetRequests)
 			r.Get("/friends", friendHandler.ListFriends)
 
@@ -68,6 +69,9 @@ func main() {
 			r.Get("/projects/{id}/members", projectHandler.Members)
 			r.Put("/projects/{id}", projectHandler.Update)
 			r.Post("/projects/{id}/invite", projectHandler.Invite)
+			r.Put("/projects/{id}/path", projectHandler.UpdateMemberPath)
+			r.Post("/projects/{id}/messages", projectHandler.SendMessage)
+			r.Get("/projects/{id}/messages", projectHandler.ListMessages)
 			// P2P Phase 4: Data sync endpoints removed. The UI now relies entirely on libp2p.
 			// r.Post("/projects/{id}/push", projectHandler.PushDelta)
 			// r.Get("/projects/{id}/pull", projectHandler.PullDeltas)

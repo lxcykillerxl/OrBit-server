@@ -27,6 +27,7 @@ type ProjectMember struct {
 	ProjectID string `json:"projectId"`
 	UserID    string `json:"userId"`
 	Role      string `json:"role"`
+	Path      string `json:"path"`
 	User      UserSearchResult `json:"user"`
 }
 
@@ -81,4 +82,17 @@ type PulseEntry struct {
 	Date           string `json:"date"` // YYYY-MM-DD
 	TasksCompleted int    `json:"tasksCompleted"`
 	DeltasPushed   int    `json:"deltasPushed"`
+}
+
+type ChatMessage struct {
+	ID        string    `json:"id"`
+	ProjectID string    `json:"projectId"`
+	AuthorID  string    `json:"authorId"`
+	Text      string    `json:"text"`
+	CreatedAt time.Time `json:"createdAt"`
+	Author    UserSearchResult `json:"author"`
+}
+
+type SendMessageRequest struct {
+	Text string `json:"text"`
 }

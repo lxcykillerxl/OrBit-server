@@ -197,3 +197,63 @@ func (h *ProjectHandler) Leaderboard(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, leaderboard)
 }
+
+func (h *ProjectHandler) UpdateMemberPath(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.GetUserID(r)
+	if userID == "" { writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"}); return }
+
+	projectID := chi.URLParam(r, "id")
+
+	var req struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"}); return
+	}
+
+	if err := h.db.UpdateMemberPath(projectID, userID, req.Path); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()}); return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+func (h *ProjectHandler) SendMessage(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.GetUserID(r)
+	if userID == "" { writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"}); return }
+
+	projectID := chi.URLParam(r, "id")
+
+	var req struct {
+		Text string `json:"text"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"}); return
+	}
+	if req.Text == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "text is required"}); return
+	}
+
+	msg, err := h.db.SaveMessage(projectID, userID, req.Text)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()}); return
+	}
+
+	writeJSON(w, http.StatusCreated, msg)
+}
+
+func (h *ProjectHandler) ListMessages(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.GetUserID(r)
+	if userID == "" { writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"}); return }
+
+	projectID := chi.URLParam(r, "id")
+	msgs, err := h.db.GetMessages(projectID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()}); return
+	}
+	if msgs == nil {
+		msgs = []models.ChatMessage{}
+	}
+
+	writeJSON(w, http.StatusOK, msgs)
+}

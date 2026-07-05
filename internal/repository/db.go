@@ -23,6 +23,7 @@ type store struct {
 	Tasks          map[string][]*models.Task          `json:"tasks"`
 	Deltas         map[string][]models.ProjectDelta   `json:"deltas"`
 	ActivityLogs   []models.ActivityLog               `json:"activityLogs"`
+	Messages       map[string][]*models.ChatMessage   `json:"messages"`
 }
 
 type DB struct {
@@ -42,6 +43,7 @@ func New(path string) (*DB, error) {
 		Tasks:          make(map[string][]*models.Task),
 		Deltas:         make(map[string][]models.ProjectDelta),
 		ActivityLogs:   []models.ActivityLog{},
+		Messages:       make(map[string][]*models.ChatMessage),
 	}}
 	if err := db.load(); err != nil {
 		return nil, fmt.Errorf("load db: %w", err)
@@ -235,6 +237,19 @@ func (db *DB) AcceptFriendRequest(requestID string) error {
 	return fmt.Errorf("pending request not found")
 }
 
+func (db *DB) RejectFriendRequest(requestID string) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	for _, fr := range db.data.FriendRequests {
+		if fr.ID == requestID && fr.Status == "pending" {
+			fr.Status = "rejected"
+			return db.save()
+		}
+	}
+	return fmt.Errorf("pending request not found")
+}
+
 func (db *DB) GetPendingRequests(userID string) ([]models.FriendRequest, error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
@@ -323,7 +338,7 @@ func (db *DB) InviteMember(projectID, userID string) error {
 		if m.UserID == userID { return nil }
 	}
 	db.data.ProjectMembers[projectID] = append(members, models.ProjectMember{
-		ProjectID: projectID, UserID: userID, Role: "member",
+		ProjectID: projectID, UserID: userID, Role: "member", Path: "",
 	})
 	return db.save()
 }
@@ -526,4 +541,77 @@ func (db *DB) GetLeaderboard(projectID string) ([]models.LeaderboardEntry, error
 		results = append(results, *stat)
 	}
 	return results, nil
+}
+
+func (db *DB) UpdateMemberPath(projectID, userID, path string) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	members := db.data.ProjectMembers[projectID]
+	updated := false
+	for i, m := range members {
+		if m.UserID == userID {
+			members[i].Path = path
+			updated = true
+			break
+		}
+	}
+	if !updated {
+		return fmt.Errorf("member not found in project")
+	}
+	db.data.ProjectMembers[projectID] = members
+	return db.save()
+}
+
+func (db *DB) SaveMessage(projectID, authorID, text string) (*models.ChatMessage, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	m := &models.ChatMessage{
+		ID:        generateID("msg"),
+		ProjectID: projectID,
+		AuthorID:  authorID,
+		Text:      text,
+		CreatedAt: time.Now().UTC(),
+	}
+
+	db.data.Messages[projectID] = append(db.data.Messages[projectID], m)
+	if err := db.save(); err != nil {
+		return nil, err
+	}
+
+	// Populate author details
+	u := db.data.Users[authorID]
+	if u != nil {
+		m.Author = models.UserSearchResult{
+			ID:          u.ID,
+			DisplayName: u.DisplayName,
+			Email:       u.Email,
+			AvatarURL:   u.AvatarURL,
+		}
+	}
+
+	return m, nil
+}
+
+func (db *DB) GetMessages(projectID string) ([]models.ChatMessage, error) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	msgs := db.data.Messages[projectID]
+	var result []models.ChatMessage
+	for _, m := range msgs {
+		cm := *m
+		u := db.data.Users[cm.AuthorID]
+		if u != nil {
+			cm.Author = models.UserSearchResult{
+				ID:          u.ID,
+				DisplayName: u.DisplayName,
+				Email:       u.Email,
+				AvatarURL:   u.AvatarURL,
+			}
+		}
+		result = append(result, cm)
+	}
+	return result, nil
 }
