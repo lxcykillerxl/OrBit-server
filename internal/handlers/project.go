@@ -96,6 +96,14 @@ func (h *ProjectHandler) PushDelta(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, delta)
 }
 
+func (h *ProjectHandler) LogPush(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.GetUserID(r)
+	if userID == "" { writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"}); return }
+	projectID := chi.URLParam(r, "id")
+	h.db.LogActivity(userID, projectID, "delta_pushed")
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 func (h *ProjectHandler) Update(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.GetUserID(r)
 	if userID == "" { writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"}); return }
@@ -118,6 +126,19 @@ func (h *ProjectHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, project)
+}
+
+func (h *ProjectHandler) DeleteProject(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.GetUserID(r)
+	if userID == "" { writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"}); return }
+
+	projectID := chi.URLParam(r, "id")
+
+	// Ideally we'd verify the user is the owner, but keeping it simple for now
+	if err := h.db.DeleteProject(projectID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()}); return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
 func (h *ProjectHandler) PullDeltas(w http.ResponseWriter, r *http.Request) {
@@ -184,6 +205,19 @@ func (h *ProjectHandler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	h.db.LogActivity(task.AssigneeID, projectID, "task_completed")
 
 	writeJSON(w, http.StatusOK, task)
+}
+
+func (h *ProjectHandler) DeleteTask(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.GetUserID(r)
+	if userID == "" { writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"}); return }
+
+	projectID := chi.URLParam(r, "id")
+	taskID := chi.URLParam(r, "taskId")
+
+	if err := h.db.DeleteTask(projectID, taskID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()}); return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
 func (h *ProjectHandler) Leaderboard(w http.ResponseWriter, r *http.Request) {

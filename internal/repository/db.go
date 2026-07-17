@@ -10,12 +10,11 @@ import (
 	"time"
 
 	"github.com/orbit/control-server/internal/models"
-	"golang.org/x/crypto/bcrypt"
 )
 
 type store struct {
 	Users          map[string]*models.User           `json:"users"`
-	Emails         map[string]string                  `json:"emails"`
+	LicenseIndex   map[string]string                 `json:"licenseIndex"` // licenseKey → userID
 	FriendRequests map[string]*models.FriendRequest   `json:"friendRequests"`
 	Friends        map[string][]string                `json:"friends"`
 	Projects       map[string]*models.Project         `json:"projects"`
@@ -24,6 +23,17 @@ type store struct {
 	Deltas         map[string][]models.ProjectDelta   `json:"deltas"`
 	ActivityLogs   []models.ActivityLog               `json:"activityLogs"`
 	Messages       map[string][]*models.ChatMessage   `json:"messages"`
+	Signals        []Signal                           `json:"signals"`
+}
+
+type Signal struct {
+	ID        string `json:"id"`
+	ProjectID string `json:"projectId"`
+	FromPeer  string `json:"fromPeer"`
+	ToPeer    string `json:"toPeer"`
+	Type      string `json:"type"`
+	Payload   string `json:"payload"`
+	CreatedAt time.Time `json:"createdAt"`
 }
 
 type DB struct {
@@ -35,7 +45,7 @@ type DB struct {
 func New(path string) (*DB, error) {
 	db := &DB{path: path, data: &store{
 		Users:          make(map[string]*models.User),
-		Emails:         make(map[string]string),
+		LicenseIndex:   make(map[string]string),
 		FriendRequests: make(map[string]*models.FriendRequest),
 		Friends:        make(map[string][]string),
 		Projects:       make(map[string]*models.Project),
@@ -44,9 +54,14 @@ func New(path string) (*DB, error) {
 		Deltas:         make(map[string][]models.ProjectDelta),
 		ActivityLogs:   []models.ActivityLog{},
 		Messages:       make(map[string][]*models.ChatMessage),
+		Signals:        []Signal{},
 	}}
 	if err := db.load(); err != nil {
 		return nil, fmt.Errorf("load db: %w", err)
+	}
+	// Ensure LicenseIndex is initialized after loading legacy data
+	if db.data.LicenseIndex == nil {
+		db.data.LicenseIndex = make(map[string]string)
 	}
 	return db, nil
 }
@@ -76,43 +91,54 @@ func generateID(prefix string) string {
 	return prefix + "_" + hex.EncodeToString(b)
 }
 
-func (db *DB) CreateUser(req models.SignupRequest) (*models.User, error) {
+// UpsertUser creates a new user or updates an existing one based on the stable UserID
+// from the license validator. No passwords. No bcrypt.
+func (db *DB) UpsertUser(id, name, email, planTier, licenseKey string) (*models.User, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	if _, exists := db.data.Emails[req.Email]; exists {
-		return nil, fmt.Errorf("email already registered")
+	now := time.Now().UTC()
+	existing := db.data.Users[id]
+	if existing != nil {
+		// Update existing user metadata
+		existing.DisplayName = name
+		existing.Email = email
+		existing.PlanTier = planTier
+		existing.LicenseKey = licenseKey
+		existing.UpdatedAt = now
+	} else {
+		// Create new user
+		existing = &models.User{
+			ID:          id,
+			DisplayName: name,
+			Email:       email,
+			PlanTier:    planTier,
+			LicenseKey:  licenseKey,
+			Bio:         "",
+			Status:      "online",
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		}
+		db.data.Users[id] = existing
 	}
 
-	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
-	if err != nil { return nil, fmt.Errorf("hash password: %w", err) }
+	// Maintain license index for fast lookups
+	db.data.LicenseIndex[licenseKey] = id
 
-	user := &models.User{
-		ID:           generateID("usr"),
-		DisplayName:  req.DisplayName,
-		Email:        req.Email,
-		PasswordHash: string(hash),
-		Bio:          "",
-		Status:       "offline",
-		CreatedAt:    time.Now().UTC(),
-	}
-
-	db.data.Users[user.ID] = user
-	db.data.Emails[user.Email] = user.ID
 	if err := db.save(); err != nil { return nil, err }
-	return user, nil
+	u := *existing
+	return &u, nil
 }
 
-func (db *DB) GetUserByEmail(email string) (*models.User, error) {
+// GetUserByLicenseKey looks up a user by their license key.
+func (db *DB) GetUserByLicenseKey(key string) (*models.User, error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
-	id, ok := db.data.Emails[email]
+	id, ok := db.data.LicenseIndex[key]
 	if !ok { return nil, nil }
 	user := db.data.Users[id]
 	if user == nil { return nil, nil }
-
-	// Return a copy
 	u := *user
 	return &u, nil
 }
@@ -125,11 +151,6 @@ func (db *DB) GetUserByID(id string) (*models.User, error) {
 	if user == nil { return nil, nil }
 	u := *user
 	return &u, nil
-}
-
-func (db *DB) VerifyPassword(user *models.User, password string) bool {
-	err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password))
-	return err == nil
 }
 
 func (db *DB) SearchUsers(query string, limit int) ([]models.UserSearchResult, error) {
@@ -180,6 +201,7 @@ func (db *DB) UpdateProfile(id, displayName, bio, avatarURL string) error {
 	u.DisplayName = displayName
 	u.Bio = bio
 	u.AvatarURL = avatarURL
+	u.UpdatedAt = time.Now().UTC()
 	return db.save()
 }
 
@@ -408,6 +430,59 @@ func (db *DB) GetDeltas(projectID string, since time.Time) ([]models.ProjectDelt
 	return result, nil
 }
 
+// SweepExpiredDeltas removes all encrypted relay blobs older than the TTL (7 days).
+// This is the "Rolling Window" approach from the Encrypted Cloud Relay spec.
+func (db *DB) SweepExpiredDeltas(ttl time.Duration) int {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	cutoff := time.Now().UTC().Add(-ttl)
+	swept := 0
+
+	for projectID, deltas := range db.data.Deltas {
+		var kept []models.ProjectDelta
+		for _, d := range deltas {
+			if d.CreatedAt.After(cutoff) {
+				kept = append(kept, d)
+			} else {
+				swept++
+			}
+		}
+		if len(kept) == 0 {
+			delete(db.data.Deltas, projectID)
+		} else {
+			db.data.Deltas[projectID] = kept
+		}
+	}
+
+	if swept > 0 {
+		db.save()
+	}
+	return swept
+}
+
+// StartDeltaSweeper launches a background goroutine that periodically purges
+// expired encrypted relay blobs. It runs every hour with a 7-day TTL.
+func (db *DB) StartDeltaSweeper() {
+	const deltaTTL = 7 * 24 * time.Hour
+	const sweepInterval = 1 * time.Hour
+
+	go func() {
+		// Run an initial sweep on startup
+		if n := db.SweepExpiredDeltas(deltaTTL); n > 0 {
+			fmt.Printf("[relay-gc] Startup sweep: purged %d expired delta(s)\n", n)
+		}
+
+		ticker := time.NewTicker(sweepInterval)
+		defer ticker.Stop()
+		for range ticker.C {
+			if n := db.SweepExpiredDeltas(deltaTTL); n > 0 {
+				fmt.Printf("[relay-gc] Periodic sweep: purged %d expired delta(s)\n", n)
+			}
+		}
+	}()
+}
+
 func (db *DB) CreateTask(projectID, title, assigneeID, creatorID string) (*models.Task, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -614,4 +689,40 @@ func (db *DB) GetMessages(projectID string) ([]models.ChatMessage, error) {
 		result = append(result, cm)
 	}
 	return result, nil
+}
+
+func (db *DB) DeleteTask(projectID, taskID string) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	tasks := db.data.Tasks[projectID]
+	var kept []*models.Task
+	for _, t := range tasks {
+		if t.ID != taskID {
+			kept = append(kept, t)
+		}
+	}
+	db.data.Tasks[projectID] = kept
+	return db.save()
+}
+
+func (db *DB) DeleteProject(projectID string) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	delete(db.data.Projects, projectID)
+	delete(db.data.ProjectMembers, projectID)
+	delete(db.data.Tasks, projectID)
+	delete(db.data.Deltas, projectID)
+	delete(db.data.Messages, projectID)
+
+	var keptSignals []Signal
+	for _, s := range db.data.Signals {
+		if s.ProjectID != projectID {
+			keptSignals = append(keptSignals, s)
+		}
+	}
+	db.data.Signals = keptSignals
+
+	return db.save()
 }
